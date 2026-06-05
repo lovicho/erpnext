@@ -6,6 +6,24 @@ frappe.provide("erpnext.item");
 const SALES_DOCTYPES = ["Quotation", "Sales Order", "Delivery Note", "Sales Invoice"];
 const PURCHASE_DOCTYPES = ["Purchase Order", "Purchase Receipt", "Purchase Invoice"];
 
+const virtual_field_map = {
+	default_warehouse: "vf_default_warehouse",
+	default_price_list: "vf_default_price_list",
+	default_discount_account: "vf_default_discount_account",
+	default_inventory_account: "vf_default_inventory_account",
+	buying_cost_center: "vf_buying_cost_center",
+	default_supplier: "vf_default_supplier",
+	expense_account: "vf_expense_account",
+	default_provisional_account: "vf_default_provisional_account",
+	purchase_expense_account: "vf_purchase_expense_account",
+	purchase_expense_contra_account: "vf_purchase_expense_contra_account",
+	selling_cost_center: "vf_selling_cost_center",
+	income_account: "vf_income_account",
+	default_cogs_account: "vf_default_cogs_account",
+	deferred_expense_account: "vf_deferred_expense_account",
+	deferred_revenue_account: "vf_deferred_revenue_account",
+};
+
 frappe.ui.form.on("Item", {
 	valuation_method(frm) {
 		if (!frm.is_new() && frm.doc.valuation_method === "Moving Average") {
@@ -255,12 +273,13 @@ frappe.ui.form.on("Item", {
 			);
 		}
 
-		erpnext.item.edit_prices_button(frm);
 		erpnext.item.toggle_attributes(frm);
 
 		if (!frm.doc.is_fixed_asset) {
 			erpnext.item.make_dashboard(frm);
 		}
+
+		erpnext.item.render_item_prices(frm);
 
 		frm.add_custom_button(__("Duplicate"), function () {
 			var new_item = frappe.model.copy_doc(frm.doc);
@@ -342,6 +361,53 @@ frappe.ui.form.on("Item", {
 
 	has_variants: function (frm) {
 		erpnext.item.toggle_attributes(frm);
+	},
+});
+
+frappe.ui.form.on("Item Default", {
+	form_render: function (frm, cdt, cdn) {
+		if (!frm.fields_dict["item_defaults"]) return;
+
+		const row = locals[cdt][cdn];
+		if (!row || !row.company) {
+			Object.values(virtual_field_map).forEach((vf) => frappe.model.set_value(cdt, cdn, vf, ""));
+			return;
+		}
+
+		const $grid_row = frm.fields_dict["item_defaults"].grid.wrapper.find(`.grid-row[data-name="${cdn}"]`);
+
+		if (!$grid_row.find(".item-defaults-desc").length) {
+			$grid_row.find(".grid-form-body").prepend(`
+				<div class="row">
+					<div class="col-xs-12">
+						<div class="item-defaults-desc" style="
+							background: var(--control-bg);
+							border-radius: var(--border-radius-sm);
+							padding: 6px 6px 8px 14px;
+							color: var(--text-muted);
+
+						">
+							${__(
+								"Left column shows inherited defaults (Item Group → Company / Stock Settings). Right column is where you set overrides for this item only."
+							)}
+						</div>
+					</div>
+				</div>
+			`);
+		}
+
+		erpnext.item.populate_virtual_fields(frm, cdt, cdn, row);
+	},
+
+	company: function (frm, cdt, cdn) {
+		if (!frm.fields_dict["item_defaults"]) return;
+
+		const row = locals[cdt][cdn];
+		if (!row || !row.company) {
+			Object.values(virtual_field_map).forEach((vf) => frappe.model.set_value(cdt, cdn, vf, ""));
+			return;
+		}
+		erpnext.item.populate_virtual_fields(frm, cdt, cdn, row);
 	},
 });
 
@@ -448,6 +514,93 @@ function render_serial_batch_banner(wrapper) {
 }
 
 $.extend(erpnext.item, {
+	populate_virtual_fields: function (frm, cdt, cdn, row) {
+		if (!frm.doc.item_group || !row.company) {
+			Object.values(virtual_field_map).forEach((vf) => frappe.model.set_value(cdt, cdn, vf, ""));
+			return;
+		}
+
+		const company = row.company;
+		const item_group = frm.doc.item_group;
+
+		frappe.call({
+			method: "frappe.client.get",
+			args: { doctype: "Item Group", name: frm.doc.item_group },
+			freeze: false,
+			callback: function (r) {
+				if (!r.message) return;
+
+				const current_row = locals[cdt][cdn];
+				if (!current_row || current_row.company !== company || frm.doc.item_group !== item_group)
+					return;
+
+				const group_defaults =
+					(r.message.item_group_defaults || []).find((d) => d.company === company) || {};
+
+				// Set Item Group values immediately; collect fields that need company fallback
+				const needs_company_fallback = [];
+				Object.entries(virtual_field_map).forEach(([real_field, vf_field]) => {
+					if (group_defaults[real_field]) {
+						frappe.model.set_value(cdt, cdn, vf_field, group_defaults[real_field]);
+					} else {
+						frappe.model.set_value(cdt, cdn, vf_field, "");
+						needs_company_fallback.push(real_field);
+					}
+				});
+
+				if (!needs_company_fallback.length) {
+					setTimeout(() => erpnext.item.update_vf_labels(frm, cdn, {}), 50);
+					return;
+				}
+				frappe.call({
+					method: "erpnext.setup.doctype.item_group.item_group.get_company_resolved_defaults",
+					args: { company: company },
+					freeze: false,
+					callback: function (cr) {
+						const current_row = locals[cdt][cdn];
+						if (
+							!current_row ||
+							current_row.company !== company ||
+							frm.doc.item_group !== item_group
+						)
+							return;
+
+						const company_defaults = cr.message || {};
+						const from_company = {};
+
+						needs_company_fallback.forEach((real_field) => {
+							const val = company_defaults[real_field] || "";
+							if (val) from_company[real_field] = val;
+							frappe.model.set_value(cdt, cdn, virtual_field_map[real_field], val || "—");
+						});
+
+						setTimeout(() => erpnext.item.update_vf_labels(frm, cdn, from_company), 50);
+					},
+				});
+			},
+		});
+	},
+
+	update_vf_labels: function (frm, cdn, from_company) {
+		const $grid_row = frm.fields_dict["item_defaults"].grid.wrapper.find(`.grid-row[data-name="${cdn}"]`);
+		if (!$grid_row.length) return;
+
+		Object.entries(virtual_field_map).forEach(([real_field, vf_field]) => {
+			const $label = $grid_row
+				.find(`[data-fieldname="${vf_field}"]`)
+				.find(".control-label, label")
+				.first();
+			if (!$label.length) return;
+
+			if (!$label.data("base-label")) {
+				$label.data("base-label", $label.text().trim());
+			}
+			const base = $label.data("base-label");
+
+			$label.text(from_company[real_field] ? `${base} (Company)` : `${base} (Item Group)`);
+		});
+	},
+
 	setup_queries: function (frm) {
 		frm.fields_dict["item_defaults"].grid.get_field("expense_account").get_query = function (
 			doc,
@@ -665,24 +818,60 @@ $.extend(erpnext.item, {
 		}
 	},
 
-	edit_prices_button: function (frm) {
-		frm.add_custom_button(
-			__("Add / Edit Prices"),
-			function () {
-				frappe.set_route("List", "Item Price", { item_code: frm.doc.name });
-			},
-			__("Actions")
+	render_item_prices: function (frm) {
+		if (frm.doc.__islocal) return;
+		const requested_item = frm.doc.name;
+		const container = frm.fields_dict["prices_html"].$wrapper;
+
+		container.html(
+			`<div class="text-muted text-center" style="padding: 20px;">${__("Loading...")}</div>`
 		);
 
-		frm.add_custom_button(
-			__("Make Lead Time"),
-			function () {
-				frm.make_new("Item Lead Time", {
-					item_code: frm.doc.name,
+		frappe.call({
+			method: "erpnext.stock.doctype.item.item.get_item_prices",
+			args: { item_code: requested_item },
+
+			callback: function (r) {
+				if (requested_item !== frm.doc.name) return;
+
+				if (!r.message) return;
+
+				const { prices, has_more } = r.message;
+
+				const html = frappe.render_template("item_prices", {
+					prices,
+					has_more,
+					item_code: requested_item,
+					stock_uom: frm.doc.stock_uom,
+				});
+
+				container.html(html);
+
+				container.find(".add-price-btn").on("click", () => {
+					const filters = {};
+					if (frm.doc.is_sales_item && !frm.doc.is_purchase_item) {
+						filters.selling = 1;
+					} else if (frm.doc.is_purchase_item && !frm.doc.is_sales_item) {
+						filters.buying = 1;
+					}
+					frappe.new_doc(
+						"Item Price",
+						{ item_code: requested_item, uom: frm.doc.stock_uom },
+						(dialog) => {
+							if (Object.keys(filters).length) {
+								dialog.fields_dict.price_list.get_query = () => ({ filters });
+							}
+						}
+					);
+				});
+
+				container.find(".price-row").on("click", function (e) {
+					if ($(e.target).is("a")) return;
+
+					frappe.set_route("Form", "Item Price", $(this).data("name"));
 				});
 			},
-			__("Actions")
-		);
+		});
 	},
 
 	weight_to_validate: function (frm) {
