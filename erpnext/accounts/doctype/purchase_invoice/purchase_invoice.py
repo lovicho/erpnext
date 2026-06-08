@@ -31,7 +31,12 @@ from erpnext.accounts.general_ledger import (
 	merge_similar_entries,
 )
 from erpnext.accounts.party import get_due_date, get_party_account
-from erpnext.accounts.utils import get_account_currency, get_fiscal_year, update_voucher_outstanding
+from erpnext.accounts.utils import (
+	get_account_currency,
+	get_fiscal_year,
+	refresh_subscription_status,
+	update_voucher_outstanding,
+)
 from erpnext.assets.doctype.asset.asset import is_cwip_accounting_enabled
 from erpnext.controllers.buying_controller import BuyingController
 
@@ -661,6 +666,10 @@ class PurchaseInvoice(BuyingController):
 			self.validate_for_repost()
 			self.repost_accounting_entries()
 
+	def refresh_subscription_status(self):
+		if self.get("subscription"):
+			refresh_subscription_status(self.subscription)
+
 	def make_gl_entries(self, gl_entries=None, from_repost=False):
 		update_outstanding = "No" if (cint(self.is_paid) or self.write_off_account) else "Yes"
 		if self.docstatus == 1:
@@ -925,9 +934,9 @@ def make_regional_gl_entries(gl_entries, doc):
 
 @frappe.whitelist()
 def change_release_date(name: str, release_date: str | None = None):
-	if frappe.db.exists("Purchase Invoice", name):
-		pi = frappe.get_lazy_doc("Purchase Invoice", name)
-		pi.db_set("release_date", release_date)
+	pi = frappe.get_lazy_doc("Purchase Invoice", name)
+	pi.check_permission()
+	pi.db_set("release_date", release_date)
 
 
 @frappe.whitelist()
