@@ -71,14 +71,17 @@ def employee_query(
 		.where(Criterion.any(search_conditions))
 		.orderby(
 			Case()
-			.when(Locate(txt_no_percent, Employee.name) > 0, Locate(txt_no_percent, Employee.name))
+			.when(
+				Locate(Lower(txt_no_percent), Lower(Employee.name)) > 0,
+				Locate(Lower(txt_no_percent), Lower(Employee.name)),
+			)
 			.else_(99999)
 		)
 		.orderby(
 			Case()
 			.when(
-				Locate(txt_no_percent, Employee.employee_name) > 0,
-				Locate(txt_no_percent, Employee.employee_name),
+				Locate(Lower(txt_no_percent), Lower(Employee.employee_name)) > 0,
+				Locate(Lower(txt_no_percent), Lower(Employee.employee_name)),
 			)
 			.else_(99999)
 		)
@@ -135,16 +138,27 @@ def lead_query(
 		.where(Lead.status.isnull() | (Lead.status != "Converted"))
 		.where(Criterion.any(search_conditions))
 		.orderby(
-			Case().when(Locate(txt_no_percent, Lead.name) > 0, Locate(txt_no_percent, Lead.name)).else_(99999)
-		)
-		.orderby(
 			Case()
-			.when(Locate(txt_no_percent, Lead.lead_name) > 0, Locate(txt_no_percent, Lead.lead_name))
+			.when(
+				Locate(Lower(txt_no_percent), Lower(Lead.name)) > 0,
+				Locate(Lower(txt_no_percent), Lower(Lead.name)),
+			)
 			.else_(99999)
 		)
 		.orderby(
 			Case()
-			.when(Locate(txt_no_percent, Lead.company_name) > 0, Locate(txt_no_percent, Lead.company_name))
+			.when(
+				Locate(Lower(txt_no_percent), Lower(Lead.lead_name)) > 0,
+				Locate(Lower(txt_no_percent), Lower(Lead.lead_name)),
+			)
+			.else_(99999)
+		)
+		.orderby(
+			Case()
+			.when(
+				Locate(Lower(txt_no_percent), Lower(Lead.company_name)) > 0,
+				Locate(Lower(txt_no_percent), Lower(Lead.company_name)),
+			)
 			.else_(99999)
 		)
 		.orderby(Lead.idx, order=Order.desc)
@@ -222,11 +236,8 @@ def item_query(
 			group = "Customer Group" if filters.get("customer") else "Supplier Group"
 			item_rules_list = frappe.get_all(
 				"Party Specific Item",
-				filters={
-					"party": ["!=", party],
-					"party_type": party_type,
-				},
-				fields=["restrict_based_on", "based_on_value"],
+				filters={"party_type": party_type},
+				fields=["party", "restrict_based_on", "based_on_value"],
 			)
 
 			party_group_rules_list = frappe.get_all(
@@ -235,21 +246,30 @@ def item_query(
 				fields=["party as party_group", "restrict_based_on", "based_on_value"],
 			)
 			current_party_group = frappe.get_value(party_type, party, frappe.scrub(group))
+
+			restricted_items = defaultdict(set)
+			allowed_items = defaultdict(set)
+
+			for rule in item_rules_list:
+				restrict_based_on = "name" if rule.restrict_based_on == "Item" else rule.restrict_based_on
+
+				if rule.party == party:
+					allowed_items[restrict_based_on].add(rule.based_on_value)
+				else:
+					restricted_items[restrict_based_on].add(rule.based_on_value)
+
 			for rule in party_group_rules_list:
-				if current_party_group != rule.party_group:
-					item_rules_list.append(rule)
+				restrict_based_on = "name" if rule.restrict_based_on == "Item" else rule.restrict_based_on
 
-			filters_dict = {}
-			for rule in item_rules_list:
-				if rule["restrict_based_on"] == "Item":
-					rule["restrict_based_on"] = "name"
-				filters_dict[rule.restrict_based_on] = []
+				if current_party_group == rule.party_group:
+					allowed_items[restrict_based_on].add(rule.based_on_value)
+				else:
+					restricted_items[restrict_based_on].add(rule.based_on_value)
 
-			for rule in item_rules_list:
-				filters_dict[rule.restrict_based_on].append(rule.based_on_value)
-
-			for filter in filters_dict:
-				filters[scrub(filter)] = ["not in", filters_dict[filter]]
+			for field, restricted_values in restricted_items.items():
+				values_to_exclude = restricted_values - allowed_items[field]
+				if values_to_exclude:
+					filters[scrub(field)] = ["not in", list(values_to_exclude)]
 
 			if filters.get("customer"):
 				del filters["customer"]
@@ -376,7 +396,12 @@ def bom(
 		.where(BOM.is_active == 1)
 		.where(BOM[searchfield].like(f"%{txt}%"))
 		.orderby(
-			Case().when(Locate(txt_no_percent, BOM.name) > 0, Locate(txt_no_percent, BOM.name)).else_(99999)
+			Case()
+			.when(
+				Locate(Lower(txt_no_percent), Lower(BOM.name)) > 0,
+				Locate(Lower(txt_no_percent), Lower(BOM.name)),
+			)
+			.else_(99999)
 		)
 		.orderby(BOM.idx, order=Order.desc)
 		.orderby(BOM.name)
