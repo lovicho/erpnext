@@ -67,6 +67,17 @@ Flag a changed query that uses any of these:
   Use `VARCHAR` / `Cast_(x, "varchar")`.
 - **`.rlike()` / raw `RLIKE`** — frappe rewrites `REGEXP` → `~*` on PostgreSQL but does **not**
   translate `RLIKE` (no such PostgreSQL operator). Use `.regexp()` (or `.like()` for a simple prefix).
+- **`IfNull`/`Coalesce` of a typed column with a different-typed literal** — `IfNull(asset.disposal_date, 0)`
+  renders `COALESCE("disposal_date", 0)`, coalescing a **DATE** with an **integer**. PostgreSQL requires
+  `COALESCE` args to share a type (`DatatypeMismatch: COALESCE types date and integer cannot be matched`);
+  MariaDB's `IFNULL` is permissive. The common shape is `IfNull(date_col, 0) != 0 / == 0` as a presence test —
+  replace with `date_col.isnotnull()` / `date_col.isnull()` (identical, and valid on both). Otherwise coalesce
+  to a **same-type** default (`Coalesce(date_col, '1900-01-01')`, `Coalesce(text_col, '')`).
+- **Division by a possibly-zero divisor** — `Sum(a) / Sum(b)`, `x / col`, etc. where the
+  divisor can be `0`/empty. MariaDB returns `NULL` for division by zero; PostgreSQL raises
+  `division by zero` and aborts the query. Wrap the divisor in `NullIf(divisor, 0)` — that
+  yields `NULL` on both engines, matching MariaDB's value. (Only the *literal* `/ 0` is a parse
+  constant; the trap is a divisor that is an aggregate or column the data can drive to zero.)
 
 ---
 
