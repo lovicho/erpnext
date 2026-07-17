@@ -104,6 +104,15 @@ class TestRepostItemValuation(ERPNextTestSuite, StockTestMixin):
 			repost_doc.creation = add_days(now(), days=-i * 10)
 			repost_doc.db_update_all()
 
+		repost_doc.add_comment("Comment", "test comment")
+		frappe.new_doc(
+			"File",
+			file_name="test_clear_old_logs.txt",
+			content="test",
+			attached_to_doctype=repost_doc.doctype,
+			attached_to_name=repost_doc.name,
+		).insert(ignore_permissions=True)
+
 		logs = frappe.get_all("Repost Item Valuation", filters={"status": "Skipped"})
 		self.assertGreater(len(logs), 10)
 
@@ -113,6 +122,15 @@ class TestRepostItemValuation(ERPNextTestSuite, StockTestMixin):
 
 		logs = frappe.get_all("Repost Item Valuation", filters={"status": "Skipped"})
 		self.assertEqual(len(logs), 0)
+
+		orphan_reference = {"reference_doctype": repost_doc.doctype, "reference_name": repost_doc.name}
+		self.assertFalse(frappe.get_all("Comment", filters=orphan_reference))
+		self.assertFalse(
+			frappe.get_all(
+				"File",
+				filters={"attached_to_doctype": repost_doc.doctype, "attached_to_name": repost_doc.name},
+			)
+		)
 
 	def test_create_item_wise_repost_item_valuation_entries(self):
 		pr = make_purchase_receipt(
@@ -669,6 +687,34 @@ class TestRepostItemValuation(ERPNextTestSuite, StockTestMixin):
 						"name",
 					)
 				)
+
+	def test_clear_attachment_skips_referenced_data_file(self):
+		riv = frappe.get_doc(
+			{
+				"doctype": "Repost Item Valuation",
+				"based_on": "Item and Warehouse",
+				"company": "_Test Company",
+				"item_code": "_Test Item",
+				"warehouse": "_Test Warehouse - _TC",
+				"posting_date": today(),
+			}
+		).insert(ignore_permissions=True)
+
+		attached = frappe.get_doc(
+			{
+				"doctype": "File",
+				"file_name": "repost_data.json.gz",
+				"content": "test",
+				"attached_to_doctype": riv.doctype,
+				"attached_to_name": riv.name,
+			}
+		).insert(ignore_permissions=True)
+		riv.db_set("reposting_data_file", attached.file_url)
+
+		riv.clear_attachment()
+
+		self.assertFalse(frappe.db.exists("File", attached.name))
+		self.assertIsNone(frappe.db.get_value("Repost Item Valuation", riv.name, "reposting_data_file"))
 
 	@ERPNextTestSuite.change_settings(
 		"Stock Reposting Settings",
