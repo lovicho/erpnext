@@ -16,6 +16,7 @@ add_to_apps_screen = [
 		"logo": "/assets/erpnext/images/erpnext-logo.svg",
 		"title": app_title,
 		"route": app_home,
+		"setup_wizard_text": "Let's give your business a home.",
 		"has_permission": "erpnext.check_app_permission",
 		"sequence_id": 1,
 	}
@@ -56,6 +57,7 @@ web_include_icons = [
 
 doctype_js = {
 	"Address": "public/js/address.js",
+	"Customer": "public/js/customer_overview.js",
 	"Sales Order": "public/js/sales_order_proforma.js",
 	"Communication": "public/js/communication.js",
 	"Event": "public/js/event.js",
