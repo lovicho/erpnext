@@ -731,9 +731,11 @@ class StockReservationEntry(Document):
 
 				if entry.serial_no in data.serial_nos:
 					entry.delivered_qty = flt(1)
+					data.serial_nos.remove(entry.serial_no)
 
 				elif entry.batch_no in data.batch_nos:
-					entry.delivered_qty = flt(data.batch_nos[entry.batch_no])
+					entry.delivered_qty = min(flt(entry.qty), data.batch_nos[entry.batch_no])
+					data.batch_nos[entry.batch_no] -= entry.delivered_qty
 
 			entry.db_update()
 
@@ -1718,6 +1720,11 @@ def create_stock_reservation_entries_for_so_items(
 	if items_details:
 		for item in items_details:
 			so_item = frappe.get_doc("Sales Order Item", item.get("sales_order_item"))
+			if so_item.parent != sales_order.name:
+				frappe.throw(
+					_("Sales Order Item {0} does not belong to {1}").format(so_item.name, sales_order.name)
+				)
+
 			so_item.warehouse = item.get("warehouse")
 			so_item.qty_to_reserve = (
 				flt(item.get("qty_to_reserve"))
@@ -2039,7 +2046,7 @@ def get_reserved_materials(voucher_no):
 			serial_batch_doc.serial_no,
 			serial_no.serial_no.as_("serial_number"),
 			serial_batch_doc.batch_no,
-			serial_batch_doc.qty,
+			(serial_batch_doc.qty - serial_batch_doc.delivered_qty).as_("qty"),
 			doctype.item_code,
 			doctype.warehouse,
 			doctype.name,
